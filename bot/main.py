@@ -1,7 +1,7 @@
 from typing import Optional
 
 from ares import AresBot
-
+from ares.behaviors.macro import AutoSupply, Mining, SpawnController
 
 class MyBot(AresBot):
     def __init__(self, game_step_override: Optional[int] = None):
@@ -18,6 +18,8 @@ class MyBot(AresBot):
     async def on_step(self, iteration: int) -> None:
         await super(MyBot, self).on_step(iteration)
 
+        # Register mining behaviors so that worker returns to mining when idle.
+        self.register_behavior(Mining())
         # step logic here ...
         pass
 
