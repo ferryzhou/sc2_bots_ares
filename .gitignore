@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# SC2 generated Data
+data/
+
 # C extensions
 *.so
 
