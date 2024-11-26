@@ -59,7 +59,7 @@ def main():
 #        ]
         # List some maps that could crash the code. Used to fix issues.
         map_list: List[str] = [
-            #"BlackpinkLE",
+        #    "BlackpinkLE",
             "BattleontheBoardwalkLE",
             #"AscensiontoAiurLE",
         ]

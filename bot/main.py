@@ -13,7 +13,7 @@ from ares.behaviors.combat.individual import (
     StutterUnitBack,
     UseAbility,
 )
-from ares.behaviors.macro import AutoSupply, Mining, SpawnController, ProductionController
+from ares.behaviors.macro import AutoSupply, Mining, SpawnController, ProductionController, ExpansionController, BuildWorkers, GasBuildingController
 from sc2.data import Race
 from sc2.ids.unit_typeid import UnitTypeId as UnitID
 from sc2.position import Point2
@@ -40,8 +40,9 @@ ARMY_COMPS: dict[Race, dict] = {
     Race.Protoss: {
         UnitID.STALKER: {"proportion": 0.4, "priority": 0},
         UnitID.ZEALOT: {"proportion": 0.3, "priority": 1},
-        UnitID.IMMORTAL: {"proportion": 0.15, "priority": 2},
-        UnitID.SENTRY: {"proportion": 0.1, "priority": 3},
+        UnitID.IMMORTAL: {"proportion": 0.2, "priority": 2},
+#        UnitID.SENTRY: {"proportion": 0.1, "priority": 3},
+        UnitID.COLOSSUS: {"proportion": 0.05, "priority": 3},
         UnitID.OBSERVER: {"proportion": 0.05, "priority": 4},
     },
     Race.Terran: {
@@ -150,6 +151,19 @@ class MyBot(AresBot):
         # https://aressc2.github.io/ares-sc2/api_reference/behaviors/macro_behaviors.html#ares.behaviors.macro.auto_supply.AutoSupply
         if self.build_order_runner.build_completed:
             self.register_behavior(AutoSupply(base_location=self.start_location))
+
+#        self.register_behavior(
+#            ExpansionController(to_count=8, can_afford_check = False, max_pending=2)
+#        )
+
+#        self.register_behavior(
+#            GasBuildingController(to_count=len(self.townhalls)*2)
+#        )
+
+#        # Need to build workers when expanding
+#        self.register_behavior(
+#            BuildWorkers(to_count=80)
+#        )
 
         # BUILD ARMY
         # ares-sc2 SpawnController
