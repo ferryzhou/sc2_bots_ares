@@ -65,9 +65,11 @@ Builds:
             - 18 gas
             - 19 pylon
             - 20 gateway
-            - 21 gateway
-            - 30 pylon x3
+            - 22 expand
+            - 25 pylon x3
             - 40 gateway x2
+            - 45 pylon x3
             - 50 cyberneticscore
+            - 55 expand
             - 60 gateway x3
 

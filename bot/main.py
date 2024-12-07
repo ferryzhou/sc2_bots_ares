@@ -38,11 +38,11 @@ COMMON_UNIT_IGNORE_TYPES: set[UnitID] = {
 # this will be used for ares SpawnController behavior
 ARMY_COMPS: dict[Race, dict] = {
     Race.Protoss: {
-        UnitID.STALKER: {"proportion": 0.4, "priority": 0},
-        UnitID.ZEALOT: {"proportion": 0.3, "priority": 1},
+        UnitID.STALKER: {"proportion": 0.6, "priority": 0},
+        UnitID.ZEALOT: {"proportion": 0.15, "priority": 1},
         UnitID.IMMORTAL: {"proportion": 0.2, "priority": 2},
 #        UnitID.SENTRY: {"proportion": 0.1, "priority": 3},
-        UnitID.COLOSSUS: {"proportion": 0.05, "priority": 3},
+#        UnitID.COLOSSUS: {"proportion": 0.1, "priority": 3},
         UnitID.OBSERVER: {"proportion": 0.05, "priority": 4},
     },
     Race.Terran: {
@@ -114,6 +114,9 @@ class MyBot(AresBot):
 
         self._macro()
 
+        if iteration > 2 * 22.4 * 60: # 2 minutes
+            self._macro_expansion()
+
         # https://aressc2.github.io/ares-sc2/api_reference/manager_mediator.html#ares.managers.manager_mediator.ManagerMediator.get_units_from_role
         # see `self.on_unit_created` where we originally assigned units ATTACKING role
         forces: Units = self.mediator.get_units_from_role(role=UnitRole.ATTACKING)
@@ -152,19 +155,6 @@ class MyBot(AresBot):
         if self.build_order_runner.build_completed:
             self.register_behavior(AutoSupply(base_location=self.start_location))
 
-#        self.register_behavior(
-#            ExpansionController(to_count=8, can_afford_check = False, max_pending=2)
-#        )
-
-#        self.register_behavior(
-#            GasBuildingController(to_count=len(self.townhalls)*2)
-#        )
-
-#        # Need to build workers when expanding
-#        self.register_behavior(
-#            BuildWorkers(to_count=80)
-#        )
-
         # BUILD ARMY
         # ares-sc2 SpawnController
         # https://aressc2.github.io/ares-sc2/api_reference/behaviors/macro_behaviors.html#ares.behaviors.macro.spawn_controller.SpawnController
@@ -174,6 +164,20 @@ class MyBot(AresBot):
             ProductionController(ARMY_COMPS[self.race], self.start_location)
         )
         self.register_behavior(SpawnController(ARMY_COMPS[self.race]))
+
+    def _macro_expansion(self) -> None:
+        self.register_behavior(
+            ExpansionController(to_count=6, can_afford_check = False, max_pending=2)
+        )
+
+        self.register_behavior(
+            GasBuildingController(to_count=len(self.townhalls)*2)
+        )
+
+        # Need to build workers when expanding
+        self.register_behavior(
+            BuildWorkers(to_count=60)
+        )
 
     def _micro(self, forces: Units) -> None:
         # make a fast batch distance query to enemy units for all our units
