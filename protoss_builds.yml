@@ -57,19 +57,17 @@ Builds:
         # Build constant workers till x supply
         ConstantWorkerProductionTill: 22
         OpeningBuildOrder:
-            - 13 pylon
-            - 15 gateway
-            - 15 gas
-            - 16 pylon
-            - 18 cyberneticscore
-            - 18 gas
-            - 19 pylon
-            - 20 gateway
+            - 12 chrono @ nexus
+            - 14 pylon @ ramp
+            - 16 gateway
+            - 16 gas
+            - 20 cyberneticscore
             - 22 expand
-            - 25 pylon x3
+            - 26 gateway
+            - 27 pylon x3
             - 40 gateway x2
             - 45 pylon x3
             - 50 cyberneticscore
             - 55 expand
-            - 60 gateway x3
+            - 60 gateway x4
 
