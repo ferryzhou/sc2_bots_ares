@@ -61,7 +61,7 @@ ARMY_COMPS: dict[Race, dict] = {
 }
 
 # Mostly copied from https://github.com/AresSC2/ares-random-example/blob/main/bot/main.py
-class MyBot(AresBot):
+class QinBot(AresBot):
     expansions_generator: cycle
     current_base_target: Point2
     _begin_attack_at_supply: float
@@ -101,7 +101,7 @@ class MyBot(AresBot):
         Can use burnysc2 hooks as usual, just add a call to the
         parent method before your own logic.
         """
-        await super(MyBot, self).on_start()
+        await super(QinBot, self).on_start()
 
         self.current_base_target = self.enemy_start_locations[0]
         self.expansions_generator = cycle(
@@ -110,7 +110,7 @@ class MyBot(AresBot):
         self._begin_attack_at_supply = 3.0 if self.race == Race.Terran else 6.0
 
     async def on_step(self, iteration: int) -> None:
-        await super(MyBot, self).on_step(iteration)
+        await super(QinBot, self).on_step(iteration)
 
         self._macro()
 
@@ -131,7 +131,7 @@ class MyBot(AresBot):
         Can use burnysc2 hooks as usual, just add a call to the
         parent method before your own logic.
         """
-        await super(MyBot, self).on_unit_created(unit)
+        await super(QinBot, self).on_unit_created(unit)
 
         # assign our forces ATTACKING by default
         if unit.type_id not in WORKER_TYPES and unit.type_id not in {
