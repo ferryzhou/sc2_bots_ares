@@ -144,22 +144,11 @@ class MyBot(AresBot):
             self.mediator.assign_role(tag=unit.tag, role=UnitRole.ATTACKING)
 
     def _macro(self) -> None:
-        # MINE
-        # ares-sc2 Mining behavior
-        # https://aressc2.github.io/ares-sc2/api_reference/behaviors/macro_behaviors.html#ares.behaviors.macro.mining.Mining
         self.register_behavior(Mining())
 
-        # MAKE SUPPLY
-        # ares-sc2 AutoSupply
-        # https://aressc2.github.io/ares-sc2/api_reference/behaviors/macro_behaviors.html#ares.behaviors.macro.auto_supply.AutoSupply
         if self.build_order_runner.build_completed:
             self.register_behavior(AutoSupply(base_location=self.start_location))
 
-        # BUILD ARMY
-        # ares-sc2 SpawnController
-        # https://aressc2.github.io/ares-sc2/api_reference/behaviors/macro_behaviors.html#ares.behaviors.macro.spawn_controller.SpawnController
-
-        # production controller
         self.register_behavior(
             ProductionController(ARMY_COMPS[self.race], self.start_location)
         )
@@ -266,37 +255,3 @@ class MyBot(AresBot):
             # DON'T FORGET TO REGISTER OUR COMBAT MANEUVER!!
             self.register_behavior(attacking_maneuver)
 
-
-    """
-    Can use `python-sc2` hooks as usual, but make a call the inherited method in the superclass
-    Examples:
-    """
-    # async def on_start(self) -> None:
-    #     await super(MyBot, self).on_start()
-    #
-    #     # on_start logic here ...
-    #
-    # async def on_end(self, game_result: Result) -> None:
-    #     await super(MyBot, self).on_end(game_result)
-    #
-    #     # custom on_end logic here ...
-    #
-    # async def on_building_construction_complete(self, unit: Unit) -> None:
-    #     await super(MyBot, self).on_building_construction_complete(unit)
-    #
-    #     # custom on_building_construction_complete logic here ...
-    #
-    # async def on_unit_created(self, unit: Unit) -> None:
-    #     await super(MyBot, self).on_unit_created(unit)
-    #
-    #     # custom on_unit_created logic here ...
-    #
-    # async def on_unit_destroyed(self, unit_tag: int) -> None:
-    #     await super(MyBot, self).on_unit_destroyed(unit_tag)
-    #
-    #     # custom on_unit_destroyed logic here ...
-    #
-    # async def on_unit_took_damage(self, unit: Unit, amount_damage_taken: float) -> None:
-    #     await super(MyBot, self).on_unit_took_damage(unit, amount_damage_taken)
-    #
-    #     # custom on_unit_took_damage logic here ...
