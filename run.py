@@ -16,6 +16,7 @@ sys.path.append("ares-sc2")
 import yaml
 
 from bot.qin import QinBot
+from bot.han import HanBot
 from ladder import run_ladder_game
 
 # change if non default setup / linux
@@ -74,7 +75,8 @@ def main():
             maps.get(random.choice(map_list)),
             [
                 bot1,
-                Computer(random_race, Difficulty.CheatVision, ai_build=AIBuild.Macro),
+                Bot(Race.Terran, HanBot(), 'HanBot')
+#                Computer(random_race, Difficulty.CheatVision, ai_build=AIBuild.Macro),
             ],
             realtime=False,
         )
