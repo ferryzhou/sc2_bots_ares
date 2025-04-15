@@ -59,9 +59,13 @@ def main():
 #        ]
         # List some maps that could crash the code. Used to fix issues.
         map_list: List[str] = [
+            p.name.replace(f".{MAP_FILE_EXT}", "")
+            for p in Path(MAPS_PATH).glob(f"*.{MAP_FILE_EXT}")
+            if p.is_file()
         #    "BlackpinkLE",
-            "BattleontheBoardwalkLE",
-            #"AscensiontoAiurLE",
+        #    "BattleontheBoardwalkLE",
+        #    "EphemeronAIE",
+        #    "AscensiontoAiurLE",
         ]
 
         random_race = random.choice([Race.Zerg, Race.Terran, Race.Protoss])

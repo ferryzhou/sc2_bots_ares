@@ -171,12 +171,12 @@ class MyBot(AresBot):
         )
 
         self.register_behavior(
-            GasBuildingController(to_count=len(self.townhalls)*2)
+            GasBuildingController(to_count=len(self.townhalls)*1.5)
         )
 
         # Need to build workers when expanding
         self.register_behavior(
-            BuildWorkers(to_count=60)
+            BuildWorkers(to_count=70)
         )
 
     def _micro(self, forces: Units) -> None:
