@@ -14,8 +14,8 @@ from typing import Dict, List, Tuple
 
 import yaml
 
-MY_BOT_NAME: str = "MyBotName"
-ZIPFILE_NAME: str = "bot.zip"
+MY_BOT_NAME: str = "qin"
+ZIPFILE_NAME: str = "qin.zip"
 
 CONFIG_FILE: str = "config.yml"
 ZIP_FILES: List[str] = [
