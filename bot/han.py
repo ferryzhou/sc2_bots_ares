@@ -11,36 +11,95 @@ from sc2.ids.ability_id import AbilityId
 import random
 from sc2.ids.upgrade_id import UpgradeId
 import math
+import time
 
 class HanBot(BotAI):
+    def __init__(self):
+        super().__init__()
+        self.race = Race.Terran
+        self.retreating_units = {}  # Initialize retreating_units dictionary
+        self.historical_retreating_units = {}  # Initialize retreating_units dictionary
+        self.defender_worker_tags = set()
+        self.waiting_for_base_expansion = False
+        self.scout_tags = set()  # Track units assigned to scouting
+        self.scouted_locations = {}  # Track when locations were last scouted (location -> time)
+        # Any other initialization you need
+    
     async def on_step(self, iteration):
         await self.manage_army()
-        # Basic economy management
-        await self.distribute_workers()
         await self.build_supply_depot_if_needed()
-        await self.manage_mules()
-        await self.train_workers()
-
-        # print(f"we have {len(self.townhalls)} bases, {self.townhalls.ready.amount} ready, {self.already_pending(UnitTypeId.COMMANDCENTER)} pending")   
-
-        if self.should_expand_base():                   
-            if self.can_afford(UnitTypeId.COMMANDCENTER):
-                await self.expand_base()
-            elif self.time >= 480: # After first 8 minutes
-                print(f"can't afford to expand, stop production in late game")
-                return
-        # Additional game management
-        if iteration % 10 == 0:  # Every 10 iterations
+        await self.manage_economy()
+        await self.manage_scouting()
+        if self.waiting_for_base_expansion:
+            return
+        if iteration % 15 == 0:  # Every 10 iterations
             print(f"iteration {iteration}")
             await self.manage_production()
+
+    async def manage_economy(self):
+        await self.distribute_workers()
+        await self.manage_mules()
+        await self.train_workers_if_needed()
+        await self.manage_base_expansion()
+    
+    async def manage_base_expansion(self):
+        if self.should_expand_base():
+            if self.can_afford(UnitTypeId.COMMANDCENTER):
+                await self.expand_base()
+            else:
+                self.waiting_for_base_expansion = True
+        else:
+            self.waiting_for_base_expansion = False
+
+    async def manage_mules(self):
+        # Transform Command Center to Orbital Command if possible
+        for cc in self.structures(UnitTypeId.COMMANDCENTER).ready.idle:
+            if self.can_afford(UnitTypeId.ORBITALCOMMAND):
+                cc(AbilityId.UPGRADETOORBITAL_ORBITALCOMMAND)
+
+        """Manage MULE production and optimal mineral mining."""
+        # Check for Orbital Commands
+        for oc in self.structures(UnitTypeId.ORBITALCOMMAND).ready:
+            # Only call down MULE if we have enough energy
+            if oc.energy < 50:
+                return
+
+            # Find the best mineral field to drop MULE on
+            mineral_fields = self.mineral_field.closer_than(10, oc)
+            if mineral_fields:
+                # Prioritize mineral fields with more minerals remaining
+                best_mineral = max(
+                    mineral_fields,
+                    key=lambda mineral: (
+                        mineral.mineral_contents,
+                        -oc.distance_to(mineral)  # Secondary sort by distance
+                    )
+                )
+                # Call down MULE
+                oc(AbilityId.CALLDOWNMULE_CALLDOWNMULE, best_mineral)
+
+    async def train_workers_if_needed(self):
+        # Modified to account for MULE income
+        mule_count = self.units(UnitTypeId.MULE).amount
+        effective_worker_count = self.workers.amount + (mule_count * 4)  # Each MULE mines like ~4 SCVs
+        
+        if effective_worker_count >= 80:
+            return
+        
+        if effective_worker_count >= 20 * self.townhalls.ready.amount:
+            return
+        
+        for cc in self.townhalls.ready.idle:
+            if self.can_afford(UnitTypeId.SCV) and self.supply_left > 0:
+                cc.train(UnitTypeId.SCV)
 
     async def manage_production(self):
         # print(f"manage_production")
         await self.build_gas_if_needed()
-        await self.build_factory_if_needed()
-        await self.build_barracks_if_needed()
-        await self.build_starport_if_needed()
-        await self.build_engineering_bay_if_needed()
+        await self.build_structure_if_needed(UnitTypeId.FACTORY)
+        await self.build_structure_if_needed(UnitTypeId.BARRACKS)
+        await self.build_structure_if_needed(UnitTypeId.STARPORT)
+        await self.build_structure_if_needed(UnitTypeId.ENGINEERINGBAY)
         await self.append_addons()
         await self.upgrade_army()
         await self.train_military_units()
@@ -51,6 +110,11 @@ class HanBot(BotAI):
         tanks = self.units(UnitTypeId.SIEGETANK) | self.units(UnitTypeId.SIEGETANKSIEGED)
         medivacs = self.units(UnitTypeId.MEDIVAC)
         ravens = self.units(UnitTypeId.RAVEN)
+        
+        # Filter out scouts from army management
+        military_units = military_units.filter(lambda u: u.tag not in self.scout_tags)
+        medivacs = medivacs.filter(lambda u: u.tag not in self.scout_tags)
+        ravens = ravens.filter(lambda u: u.tag not in self.scout_tags)
         
         await self.manage_medivacs(medivacs, military_units)
         await self.manage_ravens(ravens, military_units)
@@ -75,11 +139,109 @@ class HanBot(BotAI):
             await self.rally(military_units, tanks)
             return
 
-        print(f"attacking")
+        # print(f"attacking")
         await self.execute_attack(military_units, tanks)
 
+    async def manage_scouting(self):
+        """Manage scouting in late game to gather intelligence on enemy positions and expansions."""
+        # Only scout in late game (after 5 minutes or when we have sufficient army)
+        #if self.time < 300 and self.get_military_supply() < 30:
+        #    return
+        
+        # Determine desired number of scouts based on game time
+        desired_scouts = 1 if self.time < 600 else 2  # 1 scout before 10 min, 2 after
+        
+        # Clean up scout tags for dead units
+        self.scout_tags = {tag for tag in self.scout_tags if self.units.find_by_tag(tag)}
+        
+        current_scouts = len(self.scout_tags)
+        
+        # Assign new scouts if needed
+        if current_scouts < desired_scouts:
+            # Prefer Medivacs or Ravens for scouting (they can fly)
+            potential_scouts = (
+                self.units(UnitTypeId.MEDIVAC).idle | 
+                self.units(UnitTypeId.RAVEN).idle
+            ).filter(lambda u: u.tag not in self.scout_tags)
+            
+            # If no flying units available, use Marines
+            if not potential_scouts:
+                marines = self.units(UnitTypeId.MARINE).filter(
+                    lambda u: u.tag not in self.scout_tags and u.tag not in self.retreating_units
+                )
+                # Only take a marine if we have plenty
+                if len(marines) > 15:
+                    potential_scouts = marines.take(1)
+            
+            # Assign scouts
+            for scout in potential_scouts.take(desired_scouts - current_scouts):
+                self.scout_tags.add(scout.tag)
+                print(f"Assigned {scout.type_id} as scout")
+        
+        # Manage existing scouts
+        for scout_tag in list(self.scout_tags):
+            scout = self.units.find_by_tag(scout_tag)
+            if not scout:
+                self.scout_tags.remove(scout_tag)
+                continue
+            
+            # If scout is under attack and low health, retreat it
+            if scout.health_percentage < 0.3:
+                nearby_enemies = self.enemy_units.filter(lambda e: e.distance_to(scout) < 10)
+                if nearby_enemies:
+                    retreat_pos = scout.position.towards(self.start_location, 10)
+                    scout.move(retreat_pos)
+                    continue
+            
+            # Get scouting targets
+            scout_targets = self.get_scout_targets()
+            
+            if scout_targets:
+                # Find the nearest unscouted or least recently scouted location
+                target = min(
+                    scout_targets,
+                    key=lambda loc: (
+                        self.scouted_locations.get(loc, 0),  # Prioritize never-scouted locations
+                        scout.distance_to(loc)  # Then by distance
+                    )
+                )
+                
+                # Move scout to target
+                if scout.distance_to(target) > 3:
+                    scout.move(target)
+                else:
+                    # Mark location as scouted
+                    self.scouted_locations[target] = self.time
+                    print(f"Scout reached {target}, marking as scouted")
+    
+    def get_scout_targets(self):
+        """Get list of locations to scout (enemy expansions and key map locations)."""
+        targets = []
+        
+        # Add enemy start location
+        if self.enemy_start_locations:
+            targets.append(self.enemy_start_locations[0])
+        
+        # Add all expansion locations (to find enemy expansions)
+        for exp_loc in self.expansion_locations_list:
+            # Skip our own bases
+            if not any(th.distance_to(exp_loc) < 10 for th in self.townhalls):
+                targets.append(exp_loc)
+        
+        # Add map center for general scouting
+        targets.append(self.game_info.map_center)
+        
+        # Filter out recently scouted locations (within last 2 minutes)
+        current_time = self.time
+        targets = [
+            loc for loc in targets 
+            if current_time - self.scouted_locations.get(loc, 0) > 120
+        ]
+        
+        return targets
+
     def detected_cheese(self):
-        if self.time >= 300: # First 5 minutes
+        if self.time >= 180: # First 3 minutes
             return False
         
         th = self.start_location
@@ -286,11 +448,17 @@ class HanBot(BotAI):
                     tank.move(rally_point)
 
     async def execute_attack(self, military_units, tanks):
-        """Execute attack logic with enhanced unit micro."""
-        enemy_units = self.enemy_units
-        enemy_structures = self.enemy_structures
-        enemy_start = self.enemy_start_locations[0]
-
+        """Execute attack logic with retreat time limits."""
+        current_time = time.time()
+        
+        # Clean up old retreat timers
+        self.retreating_units = {
+            unit_tag: retreat_time 
+            for unit_tag, retreat_time in self.retreating_units.items() 
+            if current_time - retreat_time < 10
+        }
+        
+        # Filter out eggs and overlords from enemy units
         enemy_units = self.enemy_units.filter(
             lambda unit: unit.type_id not in {
                 UnitTypeId.EGG,
@@ -308,40 +476,77 @@ class HanBot(BotAI):
             }
         )
         
-        # Enhanced unit micro for attacking units
+        # Identify offensive structures (those that can attack)
+        offensive_structures = self.enemy_structures.filter(
+            lambda structure: structure.can_attack or structure.type_id in {
+                # Protoss
+                UnitTypeId.PHOTONCANNON, UnitTypeId.SHIELDBATTERY,
+                # Terran
+                UnitTypeId.MISSILETURRET, UnitTypeId.BUNKER, UnitTypeId.PLANETARYFORTRESS,
+                # Zerg
+                UnitTypeId.SPINECRAWLER, UnitTypeId.SPORECRAWLER
+            }
+        )
+        
+        # Combine enemy units with offensive structures for targeting
+        enemy_threats = enemy_units + offensive_structures
+        
+        # Other enemy structures
+        other_structures = self.enemy_structures.filter(
+            lambda structure: structure not in offensive_structures
+        )
+        
+        enemy_start = self.enemy_start_locations[0]
+        
+        # Rest of the attack logic for military units
         for unit in military_units:
-            # Find nearby enemies (excluding overlords)
-            nearby_enemies = enemy_units.filter(
-                lambda enemy: enemy.distance_to(unit) < 50
+            # Find nearby enemies including offensive structures
+            nearby_threats = enemy_threats.filter(
+                lambda enemy: enemy.distance_to(unit) < 15
             )
             
-            if nearby_enemies:
-                # Get closest enemy
-                closest_enemy = nearby_enemies.closest_to(unit)
+            # Check if unit is currently retreating
+            if unit.tag in self.retreating_units:
+                retreat_time = self.retreating_units[unit.tag]
+                if current_time - retreat_time >= 10:  # 10 seconds retreat limit
+                    del self.retreating_units[unit.tag]
+            
+            if nearby_threats:
+                closest_threat = nearby_threats.closest_to(unit)
                 
-                # Enhanced micro based on unit health and enemy type
-                if unit.ground_range > 1:  # Ranged unit micro
-                    if unit.weapon_cooldown > 0:  # If we can't shoot, move away
-                        retreat_pos = unit.position.towards(closest_enemy.position, -2)
-                        unit.move(retreat_pos)
-                    else:  # If we can shoot, attack
-                        unit.attack(closest_enemy)
-                else:  # Melee units or other cases
-                    unit.attack(closest_enemy)
-            elif enemy_structures:
-                # Attack nearest structure if no units nearby
-                closest_structure = enemy_structures.closest_to(unit)
-                unit.attack(closest_structure)
-            else:
-                unit.attack(enemy_start)
+                # Handle unit actions based on health
+                if unit.health_percentage < 0.4 and unit.tag not in self.retreating_units and unit.tag not in self.historical_retreating_units:
+                    # Start retreat
+                    retreat_pos = unit.position.towards(self.start_location, 20)
+                    unit.move(retreat_pos)
+                    self.retreating_units[unit.tag] = current_time
+                    self.historical_retreating_units[unit.tag] = current_time
+                elif unit.tag not in self.retreating_units:
+                    # Normal combat micro
+                    if unit.ground_range > 1:  # Ranged unit
+                        if unit.weapon_cooldown > 0:  # If we can't shoot, kite back
+                            retreat_pos = unit.position.towards(closest_threat.position, -2)
+                            unit.move(retreat_pos)
+                        else:  # If we can shoot, attack
+                            unit.attack(closest_threat)
+                    else:  # Melee units
+                        unit.attack(closest_threat)
+            
+            elif unit.tag not in self.retreating_units:
+                # No nearby threats, attack other structures or enemy base
+                if other_structures:
+                    closest_structure = other_structures.closest_to(unit)
+                    unit.attack(closest_structure)
+                else:
+                    unit.attack(enemy_start)
         
-        # Enhanced tank micro for attacking
+        # Handle tanks with similar priority
         for tank in tanks:
             target = enemy_start
-            if enemy_units:
-                target = enemy_units.closest_to(tank)
-            elif enemy_structures:
-                target = enemy_structures.closest_to(tank)
+            if nearby_threats:
+                target = nearby_threats.closest_to(tank)
+            elif other_structures:
+                target = other_structures.closest_to(tank)
             
             await self.manage_attacking_tank(tank, target)
 
@@ -352,17 +557,18 @@ class HanBot(BotAI):
         enemy_distance = target.distance_to(tank)
         
         if tank.type_id == UnitTypeId.SIEGETANK:
-            if enemy_distance < 13:  # Optimal siege range
+            if enemy_distance < 15:  # Optimal siege range
                 tank(AbilityId.SIEGEMODE_SIEGEMODE)
             else:
                 # Move closer while avoiding getting too close
-                desired_position = target.position.towards(tank.position, 12)
+                desired_position = target.position.towards(tank.position, 14)
                 tank.move(desired_position)
         elif tank.type_id == UnitTypeId.SIEGETANKSIEGED:
-            if enemy_distance > 15:  # Enemy moved out of range
+            if enemy_distance > 20:  # Enemy moved out of range
                 tank(AbilityId.UNSIEGE_UNSIEGE)
             # Otherwise stay sieged and let default attack handle it
     
+
     async def manage_attacking_ravens(self, ravens, enemy_units):
         """Manage Raven auto-turrets during attacks."""
         if not ravens or not enemy_units:
@@ -386,7 +592,7 @@ class HanBot(BotAI):
                     # Ensure the position is on valid terrain
                     if self.in_pathing_grid(turret_position):
                         raven(AbilityId.BUILDAUTOTURRET_AUTOTURRET, turret_position)
-                        print(f"Raven {raven.tag} dropping turret during attack")
+                        # print(f"Raven {raven.tag} dropping turret during attack")
     
 
         # Get closest enemy unit for each raven    
@@ -484,58 +690,57 @@ class HanBot(BotAI):
                     depot(AbilityId.MORPH_SUPPLYDEPOT_RAISE)
 
     def get_max_refineries(self):
+        if self.get_total_structure_count(UnitTypeId.BARRACKS) == 0:
+            return 0
         if self.townhalls.ready.amount == 1:
             return 1
         if self.townhalls.ready.amount == 2:
-            return 3
+            return 4
         return self.townhalls.ready.amount * 1.2 + 2
 
     async def build_gas_if_needed(self):
-        if self.get_total_structure_count(UnitTypeId.BARRACKS) == 0:
+        if self.get_total_structure_count(UnitTypeId.REFINERY) >= self.get_max_refineries():
             return
+        if self.can_afford(UnitTypeId.REFINERY):
+            await self.build_one_gas()
 
-        total_refineries = self.get_total_structure_count(UnitTypeId.REFINERY)
-
-        if total_refineries >= self.get_max_refineries():
-            return
-
+    async def build_one_gas(self):
         for th in self.townhalls.ready:
             vgs = self.vespene_geyser.closer_than(10, th)
             for vg in vgs:
-                if await self.can_place_single(UnitTypeId.REFINERY, vg.position) and self.can_afford(UnitTypeId.REFINERY):
+                if await self.can_place_single(UnitTypeId.REFINERY, vg.position):
                     workers = self.workers.gathering
                     if workers:
                         worker = workers.closest_to(vg)
                         worker.build_gas(vg)
                         return
 
-    def get_max_barracks(self):
-        if self.townhalls.ready.amount == 1:
-            return 2
-        return min(self.workers.amount // 6, 12)
+    async def build_structure_if_needed(self, unit_type):
+        if not self.can_afford(unit_type):
+            return
+        if self.get_total_structure_count(unit_type) >= self.get_max_structure_count(unit_type):
+            return
+        await self.build_structure(unit_type)
+    
+    def get_max_structure_count(self, unit_type):
+        if unit_type == UnitTypeId.BARRACKS:
+            return self.get_max_barracks()
+        if unit_type == UnitTypeId.FACTORY:
+            return self.get_max_factories()
+        if unit_type == UnitTypeId.STARPORT:
+            return self.get_max_starports()
+        return 0
 
-    async def build_barracks_if_needed(self):
-        if not self.townhalls:
+    async def build_structure(self, unit_type):
+        if not self.can_afford(unit_type):
             return
-
-        if not self.townhalls.ready:
-            return
-            
-        if not self.can_afford(UnitTypeId.BARRACKS):
-            return
-            
-        total_barracks = self.get_total_structure_count(UnitTypeId.BARRACKS)
-        
-        if total_barracks >= self.get_max_barracks():
-            return
-        
         # Get main base and its position
         cc = self.townhalls.first
         base_pos = cc.position
         
         # Try primary placement method
         pos = await self.find_placement(
-            UnitTypeId.BARRACKS,
+            unit_type,
             near_position=base_pos,
             min_distance=6,
             max_distance=25,
@@ -543,11 +748,11 @@ class HanBot(BotAI):
         )
         
         if pos:
-            print(f"Building barracks at position {pos}")
-            await self.build(UnitTypeId.BARRACKS, near=pos)
+            print(f"Building {unit_type} at position {pos}")
+            await self.build(unit_type, near=pos)
         else:
             # Fallback method 1: Try direct placement
-            print("Fallback: Using direct placement for barracks")
+            print(f"Fallback: Using direct placement for {unit_type}")
             potential_positions = [
                 base_pos.towards(self.game_info.map_center, 8),
                 base_pos.towards(self.game_info.map_center, 12),
@@ -555,215 +760,176 @@ class HanBot(BotAI):
             ]
             
             for fallback_pos in potential_positions:
-                if await self.can_place(UnitTypeId.BARRACKS, fallback_pos):
-                    await self.build(UnitTypeId.BARRACKS, near=fallback_pos)
+                if await self.can_place(unit_type, fallback_pos):
+                    await self.build(unit_type, near=fallback_pos)
                     return
             
             # Fallback method 2: Just try the standard build method near base
-            await self.build(UnitTypeId.BARRACKS, near=base_pos)
+            await self.build(unit_type, near=base_pos)
 
-    async def build_factory_if_needed(self):
-        # Need barracks before factory
+
+    def get_max_barracks(self):
+        if self.townhalls.ready.amount == 1 and self.get_total_structure_count(UnitTypeId.BARRACKS) < 2:
+            return 1
+        barracks_by_workers = self.workers.amount // 6
+        maxinum = 12
+        if self.get_max_factories() == 0:
+            maxinum = 3
+        if self.structures(UnitTypeId.FACTORY).ready.amount == 0:
+            maxinum = 3
+        if self.get_max_factories() == 1:
+            maxinum = 6
+        return min(barracks_by_workers, maxinum)
+
+    def get_max_factories(self):
         if not self.structures(UnitTypeId.BARRACKS).ready:
-            return
-        
-        if not self.can_afford(UnitTypeId.FACTORY):
-            return
-        
-        if not self.townhalls:
-            return
-        
-        # Get current factory count (including flying factories)
-        total_factories = self.get_total_structure_count(UnitTypeId.FACTORY)
+            return 0
+        #if self.get_military_supply() < 10:
+        #    return 0
+        if self.townhalls.ready.amount <= 2:
+            return 1
+        if self.townhalls.ready.amount <= 3:
+            return 2
+        return 3
 
-        # Always build first factory when we have enough military units
-        if total_factories == 0 and self.get_military_supply() >= 10:
-            # Find placement for factory with addon space
-            pos = await self.find_placement(
-                UnitTypeId.FACTORY,
-                near_position=self.townhalls.first.position,
-                min_distance=6,
-                max_distance=25,
-                addon_space=True
-            )
-            
-            if pos:
-                print(f"Building factory at position {pos}")
-                await self.build(UnitTypeId.FACTORY, near=pos)
-            else:
-                print("Fallback: Using direct placement for factory")
-                # Fallback: build near any barracks
-                barracks = self.structures(UnitTypeId.BARRACKS).ready
-                if barracks:
-                    await self.build(UnitTypeId.FACTORY, near=barracks.random.position.towards(self.game_info.map_center, 7))
-                else:
-                    await self.build(UnitTypeId.FACTORY, near=self.townhalls.first)
-            return
 
-        # Only build second factory when we have a large ground army
-        ground_units = self.units(UnitTypeId.MARINE).amount + self.units(UnitTypeId.MARAUDER).amount
-        if total_factories == 1 and ground_units >= 30:
-            pos = await self.find_placement(
-                UnitTypeId.FACTORY,
-                near_position=self.townhalls.first.position,
-                min_distance=6,
-                max_distance=25,
-                addon_space=True
-            )
-            
-            if pos:
-                await self.build(UnitTypeId.FACTORY, near=pos)
-            else:
-                # Fallback: build near any barracks
-                barracks = self.structures(UnitTypeId.BARRACKS).ready
-                if barracks:
-                    await self.build(UnitTypeId.FACTORY, near=barracks.random.position.towards(self.game_info.map_center, 7))
-
-    async def build_starport_if_needed(self):
-        # Need at least one factory before starport
+    def get_max_starports(self):
         if not self.structures(UnitTypeId.FACTORY).ready:
-            return
-    
-        if not self.can_afford(UnitTypeId.STARPORT):
-            return
-        
-        if not self.townhalls:
-            return
+            return 0
+        if self.get_military_supply() < 10:
+            return 0
+        return 2
 
-        # Check if we already have starports or one is in progress (including flying)
-        total_starports = self.get_total_structure_count(UnitTypeId.STARPORT)
-        
-        if total_starports >= 2:
-            return
 
-        # Find placement for starport with addon space
-        pos = await self.find_placement(
-            UnitTypeId.STARPORT,
-            near_position=self.townhalls.first.position,
-            min_distance=6,
-            max_distance=25,
-            addon_space=True
-        )
-        
-        if pos:
-            print(f"Building starport at position {pos}")
-            await self.build(UnitTypeId.STARPORT, near=pos)
-        else:
-            print("Fallback: Using direct placement for starport")
-            # Fallback: build near factory or barracks
-            if self.structures(UnitTypeId.FACTORY).ready:
-                await self.build(UnitTypeId.STARPORT, near=self.structures(UnitTypeId.FACTORY).ready.random.position)
-            elif self.structures(UnitTypeId.BARRACKS).ready:
-                await self.build(UnitTypeId.STARPORT, near=self.structures(UnitTypeId.BARRACKS).ready.random.position)
-            else:
-                await self.build(UnitTypeId.STARPORT, near=self.townhalls.first)
+    def get_max_engineering_bays(self):
+        if not self.structures(UnitTypeId.FACTORY).ready:
+            return 0
+        if self.get_military_supply() < 10:
+            return 0
+        return 2
 
-    async def build_engineering_bay_if_needed(self):
-        # Only start upgrades when we have enough units
-        if self.get_military_supply() < 30:
-            return
-        
-        if not self.townhalls:
-            return
-        
-        if self.get_total_structure_count(UnitTypeId.ENGINEERINGBAY) >= 2:
-            return
-        
-        if not self.can_afford(UnitTypeId.ENGINEERINGBAY):
-            return
+    def get_desired_units(self, unit_type):
+        if unit_type == UnitTypeId.MARINE:
+            return self.get_desired_marines()
+        if unit_type == UnitTypeId.MARAUDER:
+            return self.get_desired_marauders()
+        if unit_type == UnitTypeId.SIEGETANK:
+            return self.get_desired_tanks()
+        if unit_type == UnitTypeId.MEDIVAC:
+            return self.get_desired_medivacs()
+        if unit_type == UnitTypeId.RAVEN:
+            return self.get_desired_ravens()
+        return 0
 
-        # Find placement for engineering bay (no addon needed)
-        pos = await self.find_placement(
-            UnitTypeId.ENGINEERINGBAY,
-            near_position=self.townhalls.first.position,
-            min_distance=5,
-            max_distance=20,
-            addon_space=False
-        )
+    def train_units_if_needed(self, unit_type):
+        desired_units = self.get_desired_units(unit_type)
+        print(f"desired units for {unit_type}: {desired_units}")
+        if desired_units > 0:
+            self.train_units(unit_type)
+
+    def train_units(self, unit_type):
+        if unit_type == UnitTypeId.MARINE:
+            self.train_marines()
+        if unit_type == UnitTypeId.MARAUDER:
+            self.train_marauders()
+        if unit_type == UnitTypeId.SIEGETANK:
+            self.train_tanks()
+        if unit_type == UnitTypeId.MEDIVAC:
+            self.train_medivacs()
+        if unit_type == UnitTypeId.RAVEN:
+            self.train_ravens()
+
+    def get_total_units_count(self, unit_type):
+        return self.units(unit_type).amount + self.already_pending(unit_type)
+
+    def get_desired_marines(self):
+        if not self.structures(UnitTypeId.BARRACKS).ready:
+            return 0
+        marine_count = self.get_total_units_count(UnitTypeId.MARINE)
+        marauder_count = self.get_total_units_count(UnitTypeId.MARAUDER)
+        return marauder_count - marine_count + 8
+
+    def get_desired_marauders(self):
+        if not self.structures(UnitTypeId.BARRACKS).ready:
+            return 0
+        marauder_count = self.get_total_units_count(UnitTypeId.MARAUDER)
+        marine_count = self.get_total_units_count(UnitTypeId.MARINE)
+        return marine_count - marauder_count + 2
+   
+    def get_desired_tanks(self):
+        if not self.structures(UnitTypeId.FACTORY).ready:
+            return 0
+        if self.get_military_supply() < 5:
+            return 0
+        return 8
+
+    def get_desired_medivacs(self):
+        if not self.structures(UnitTypeId.STARPORT).ready:
+            return 0
+
+        if self.get_military_supply() < 10:
+            return 0
         
-        if pos:
-            print(f"Building engineering bay at position {pos}")
-            await self.build(UnitTypeId.ENGINEERINGBAY, near=pos)
-        else:
-            print("Fallback: Using direct placement for engineering bay")
-            # Fallback method for engineering bay
-            await self.build(UnitTypeId.ENGINEERINGBAY, near=self.townhalls.first.position.towards(self.game_info.map_center, 8))
-
-    def build_tanks_if_needed(self):
-        # Build tanks if we have enough military units and a factory with tech lab
-        if self.get_military_supply() >= 10:
-            for factory in self.structures(UnitTypeId.FACTORY).ready.idle:
-                if factory.has_add_on:
-                    if factory.add_on_tag in self.structures(UnitTypeId.FACTORYTECHLAB).tags:
-                        if self.can_afford(UnitTypeId.SIEGETANK) and self.supply_left > 4:
-                            factory.train(UnitTypeId.SIEGETANK)
-
-    def build_medivacs_if_needed(self):
-        # Build medivacs based on ground unit count
-        ground_units = self.units(UnitTypeId.MARINE).amount + self.units(UnitTypeId.MARAUDER).amount
+        ground_units = self.get_total_units_count(UnitTypeId.MARINE) + self.get_total_units_count(UnitTypeId.MARAUDER)
         desired_medivacs = ground_units // 8  # One medivac for every 8 ground units
-        current_medivacs = self.units(UnitTypeId.MEDIVAC).amount
-        
-        if current_medivacs < desired_medivacs:
-            for starport in self.structures(UnitTypeId.STARPORT).ready.idle:
-                if self.can_afford(UnitTypeId.MEDIVAC) and self.supply_left > 2:
-                    starport.train(UnitTypeId.MEDIVAC)
 
-    def build_ravens_if_needed(self):
-        # Build Ravens (up to 2)
-        current_ravens = self.units(UnitTypeId.RAVEN).amount
-        desired_ravens = 2
-        
-        if current_ravens < desired_ravens:
-            for starport in self.structures(UnitTypeId.STARPORT).ready.idle:
-                if starport.has_add_on:
-                    if starport.add_on_tag in self.structures(UnitTypeId.STARPORTTECHLAB).tags:
-                        if self.can_afford(UnitTypeId.RAVEN) and self.supply_left > 2:
-                            starport.train(UnitTypeId.RAVEN)
+        return desired_medivacs
 
-    def build_marines_marauders_if_needed(self):
-        marine_count = self.units(UnitTypeId.MARINE).amount + self.already_pending(UnitTypeId.MARINE)
-        marauder_count = self.units(UnitTypeId.MARAUDER).amount + self.already_pending(UnitTypeId.MARAUDER)
+    def get_desired_ravens(self):
+        if not self.structures(UnitTypeId.STARPORT).ready:
+            return 0
+        if self.get_military_supply() < 10:
+            return 0
+        return 2
 
-        should_train_marauders = marauder_count < marine_count
+    def train_tanks(self):
+        for factory in self.structures(UnitTypeId.FACTORY).ready.idle:
+            if factory.has_add_on:
+                if factory.add_on_tag in self.structures(UnitTypeId.FACTORYTECHLAB).tags:
+                    if self.can_afford(UnitTypeId.SIEGETANK):
+                        factory.train(UnitTypeId.SIEGETANK)
+                    else:
+                        print(f"cannot afford tanks")
 
+    def train_medivacs(self):
+        for starport in self.structures(UnitTypeId.STARPORT).ready.idle:
+            if self.can_afford(UnitTypeId.MEDIVAC):
+                starport.train(UnitTypeId.MEDIVAC)
+
+    def train_ravens(self):
+        for starport in self.structures(UnitTypeId.STARPORT).ready.idle:
+            if starport.has_add_on:
+                if starport.add_on_tag in self.structures(UnitTypeId.STARPORTTECHLAB).tags:
+                    if self.can_afford(UnitTypeId.RAVEN):
+                        starport.train(UnitTypeId.RAVEN)
+
+    def train_marines(self):
         for barracks in self.structures(UnitTypeId.BARRACKS).ready.idle:
             if barracks.has_add_on:
                 if barracks.add_on_tag in self.structures(UnitTypeId.BARRACKSTECHLAB).tags:
-                    if should_train_marauders:
-                        if self.can_afford(UnitTypeId.MARAUDER) and self.supply_left > 2:
-                            barracks.train(UnitTypeId.MARAUDER)
-                    else:
-                        if self.can_afford(UnitTypeId.MARINE) and self.supply_left > 1:
-                            barracks.train(UnitTypeId.MARINE)
+                    if self.can_afford(UnitTypeId.MARINE):
+                        barracks.train(UnitTypeId.MARINE)
                 elif barracks.add_on_tag in self.structures(UnitTypeId.BARRACKSREACTOR).tags:
                     for _ in range(2):
-                        if self.can_afford(UnitTypeId.MARINE) and self.supply_left > 1:
+                        if self.can_afford(UnitTypeId.MARINE):
                             barracks.train(UnitTypeId.MARINE)
             else:
-                if self.can_afford(UnitTypeId.MARINE) and self.supply_left > 1:
+                if self.can_afford(UnitTypeId.MARINE):
                     barracks.train(UnitTypeId.MARINE)
 
-    async def train_military_units(self):
-        self.build_tanks_if_needed()
-        self.build_medivacs_if_needed()
-        self.build_ravens_if_needed()
-        self.build_marines_marauders_if_needed()
+    def train_marauders(self):
+        for barracks in self.structures(UnitTypeId.BARRACKS).ready.idle:
+            if barracks.has_add_on:
+                if barracks.add_on_tag in self.structures(UnitTypeId.BARRACKSTECHLAB).tags:
+                    if self.can_afford(UnitTypeId.MARAUDER):
+                        barracks.train(UnitTypeId.MARAUDER)
 
-    async def train_workers(self):
-        # Modified to account for MULE income
-        mule_count = self.units(UnitTypeId.MULE).amount
-        effective_worker_count = self.workers.amount + (mule_count * 4)  # Each MULE mines like ~4 SCVs
-        
-        if effective_worker_count >= 80:
-            return
-        
-        if effective_worker_count >= 20 * self.townhalls.ready.amount:
-            return
-        
-        for cc in self.townhalls.ready.idle:
-            if self.can_afford(UnitTypeId.SCV) and self.supply_left > 0:
-                cc.train(UnitTypeId.SCV)
+    async def train_military_units(self):
+        self.train_units_if_needed(UnitTypeId.SIEGETANK)
+        self.train_units_if_needed(UnitTypeId.MEDIVAC)
+        self.train_units_if_needed(UnitTypeId.RAVEN)
+        self.train_units_if_needed(UnitTypeId.MARAUDER)
+        self.train_units_if_needed(UnitTypeId.MARINE)
 
     def should_attack(self):
         # Get our military units
@@ -948,8 +1114,11 @@ class HanBot(BotAI):
         if len(self.townhalls) > 12:
             return False
         
-        # Check if we're already expanding for more than 2 bases
-        if self.already_pending(UnitTypeId.COMMANDCENTER) > 2:
+        if self.townhalls.ready.amount == 1 and self.already_pending(UnitTypeId.COMMANDCENTER) == 1:
+            return False
+        
+        # Check if we're already expanding for equal or more than 2 bases
+        if self.already_pending(UnitTypeId.COMMANDCENTER) >= 2:
             return False
 
         # Check if current bases are saturated (16 workers per base is optimal)
@@ -1037,7 +1206,7 @@ class HanBot(BotAI):
         # Build Engineering Bays if we don't have them and can afford it
         if (len(self.structures(UnitTypeId.ENGINEERINGBAY)) + self.already_pending(UnitTypeId.ENGINEERINGBAY) < 2 and 
             self.can_afford(UnitTypeId.ENGINEERINGBAY)):
-            await self.build_engineering_bay_if_needed()
+            await self.build_structure_if_needed(UnitTypeId.ENGINEERINGBAY)
             return
 
         # Build Factory if we don't have one (required for Armory)
@@ -1045,7 +1214,7 @@ class HanBot(BotAI):
             not self.structures(UnitTypeId.FACTORY) and
             not self.already_pending(UnitTypeId.FACTORY) and
             self.can_afford(UnitTypeId.FACTORY)):
-            await self.build_factory_if_needed()
+            await self.build_structure_if_needed(UnitTypeId.FACTORY)
             return
 
         # Build Armory for level 2 and 3 upgrades
@@ -1261,31 +1430,6 @@ class HanBot(BotAI):
         # Return from dictionary if available, otherwise default to (100, 25)
         return unit_costs.get(unit_type_id, (100, 25))
 
-    async def manage_mules(self):
-        # Transform Command Center to Orbital Command if possible
-        for cc in self.structures(UnitTypeId.COMMANDCENTER).ready.idle:
-            if self.can_afford(UnitTypeId.ORBITALCOMMAND):
-                cc(AbilityId.UPGRADETOORBITAL_ORBITALCOMMAND)
-
-        """Manage MULE production and optimal mineral mining."""
-        # Check for Orbital Commands
-        for oc in self.structures(UnitTypeId.ORBITALCOMMAND).ready:
-            # Only call down MULE if we have enough energy
-            if oc.energy >= 50:
-                # Find the best mineral field to drop MULE on
-                mineral_fields = self.mineral_field.closer_than(10, oc)
-                if mineral_fields:
-                    # Prioritize mineral fields with more minerals remaining
-                    best_mineral = max(
-                        mineral_fields,
-                        key=lambda mineral: (
-                            mineral.mineral_contents,
-                            -oc.distance_to(mineral)  # Secondary sort by distance
-                        )
-                    )
-                    # Call down MULE
-                    oc(AbilityId.CALLDOWNMULE_CALLDOWNMULE, best_mineral)
-
     def get_total_structure_count(self, unit_type):
         """
         Count the total number of a unit type, including ready, flying, and pending structures.
@@ -1327,7 +1471,7 @@ def main():
         [
             Bot(Race.Terran, bot),
             Computer(Race.Zerg, Difficulty.CheatInsane)
-#            Computer(Race.Protoss, Difficulty.CheatVision)
+#            Computer(Race.Protoss, Difficulty.CheatInsane)
         ],
         realtime=False
     )
