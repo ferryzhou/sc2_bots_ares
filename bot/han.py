@@ -32,15 +32,19 @@ class HanBot(BotAI):
         await self.manage_scouting()
         if self.waiting_for_base_expansion:
             return
-        if iteration % 15 == 0:  # Every 10 iterations
+        await self.manage_production()
+        
+        if iteration % 15 == 0:
             print(f"iteration {iteration}")
-            await self.manage_production()
+            await self.train_military_units()
 
     async def manage_economy(self):
         await self.distribute_workers()
         await self.manage_mules()
-        await self.train_workers_if_needed()
         await self.manage_base_expansion()
+        if self.waiting_for_base_expansion:
+            return
+        await self.train_workers_if_needed()
     
     async def manage_base_expansion(self):
         if self.should_expand_base():
@@ -102,7 +106,6 @@ class HanBot(BotAI):
         await self.build_structure_if_needed(UnitTypeId.ENGINEERINGBAY)
         await self.append_addons()
         await self.upgrade_army()
-        await self.train_military_units()
 
     async def manage_army(self):
         # Get all military units
@@ -543,6 +546,10 @@ class HanBot(BotAI):
         # Handle tanks with similar priority
         for tank in tanks:
             target = enemy_start
+            # Find nearby enemies including offensive structures
+            nearby_threats = enemy_threats.filter(
+                lambda enemy: enemy.distance_to(tank) < 25
+            )
             if nearby_threats:
                 target = nearby_threats.closest_to(tank)
             elif other_structures:
@@ -1113,12 +1120,12 @@ class HanBot(BotAI):
         # Don't expand if we're at max bases
         if len(self.townhalls) > 12:
             return False
-        
-        if self.townhalls.ready.amount == 1 and self.already_pending(UnitTypeId.COMMANDCENTER) == 1:
+
+        if self.structures(UnitTypeId.BARRACKS).ready.amount < 1:
             return False
         
         # Check if we're already expanding for equal or more than 2 bases
-        if self.already_pending(UnitTypeId.COMMANDCENTER) >= 2:
+        if self.already_pending(UnitTypeId.COMMANDCENTER) >= 1:
             return False
 
         # Check if current bases are saturated (16 workers per base is optimal)
@@ -1132,7 +1139,7 @@ class HanBot(BotAI):
                 continue
             
             # Check worker saturation for viable bases
-            if len(self.workers.closer_than(10, th)) < 16:
+            if len(self.workers.closer_than(10, th)) < 15:
                 return False  # Don't expand if current viable bases aren't almost fully utilized
             
         return True
@@ -1470,8 +1477,8 @@ def main():
         maps.get(maps_pool[0]),
         [
             Bot(Race.Terran, bot),
-            Computer(Race.Zerg, Difficulty.CheatInsane)
-#            Computer(Race.Protoss, Difficulty.CheatInsane)
+#            Computer(Race.Zerg, Difficulty.CheatInsane)
+            Computer(Race.Protoss, Difficulty.CheatInsane)
         ],
         realtime=False
     )
