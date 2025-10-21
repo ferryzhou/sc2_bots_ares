@@ -17,6 +17,7 @@ import yaml
 
 from bot.qin import QinBot
 from bot.han import HanBot
+from bot.random import MyBot
 from ladder import run_ladder_game
 
 # change if non default setup / linux
@@ -74,8 +75,9 @@ def main():
         run_game(
             maps.get(random.choice(map_list)),
             [
-                bot1,
-                Bot(Race.Terran, HanBot(), 'HanBot')
+                #bot1,
+                Bot(Race.Terran, HanBot(), 'HanBot'),
+                Bot(Race.Terran, MyBot(), 'RandomBot'),
 #                Computer(random_race, Difficulty.CheatVision, ai_build=AIBuild.Macro),
             ],
             realtime=False,
