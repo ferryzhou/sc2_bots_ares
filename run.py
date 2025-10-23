@@ -75,10 +75,10 @@ def main():
         run_game(
             maps.get(random.choice(map_list)),
             [
-                #bot1,
-                Bot(Race.Terran, HanBot(), 'HanBot'),
+#                bot1,
+                #Bot(Race.Terran, HanBot(), 'HanBot'),
                 Bot(Race.Terran, MyBot(), 'RandomBot'),
-#                Computer(random_race, Difficulty.CheatVision, ai_build=AIBuild.Macro),
+                Computer(Race.Protoss, Difficulty.CheatInsane, ai_build=AIBuild.Macro),
             ],
             realtime=False,
         )
