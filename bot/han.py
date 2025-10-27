@@ -246,13 +246,13 @@ class HanBot(BotAI):
             self.worker_scout_tag = None
             return
         
-        # If it's past early game (3 minutes), return scout to mining
-        if self.time > 180:
+        # If it's past early game (3 minutes) or health is low, return scout to mining
+        if self.time > 180 or scout.health_percentage < 0.3:
             if self.mineral_field:
                 closest_mineral = self.mineral_field.closest_to(scout)
                 scout.gather(closest_mineral)
             self.worker_scout_tag = None
-            print(f"Returning worker scout to mining")
+            print(f"Returning worker scout to mining {scout.health_percentage} {self.time}")
             return
         
         if not self.enemy_start_locations:
@@ -268,7 +268,7 @@ class HanBot(BotAI):
             self.worker_scout_target = enemy_base
             return
         
-        r = 5
+        r = 7
         potential_patrol_points = [
             enemy_base + Point2((r, r)),
             enemy_base + Point2((r, 0)),
@@ -283,7 +283,7 @@ class HanBot(BotAI):
         # Filter to only valid, buildable points
         patrol_points = [
             p for p in potential_patrol_points
-            if self.in_map_bounds(p) and self.can_place(UnitTypeId.SUPPLYDEPOT, p) and self.in_pathing_grid(p)
+            if self.in_map_bounds(p) and self.in_pathing_grid(p)
         ]
         #print(f"number of patrol points: {len(patrol_points)}")
         
@@ -305,7 +305,7 @@ class HanBot(BotAI):
             # Find current target's index and move to next point
             current_index = -1
             for i, point in enumerate(patrol_points):
-                if point.distance_to(self.worker_scout_target) < 3:
+                if scout.distance_to(point) < 3:
                     current_index = i
                     break
             
@@ -319,10 +319,10 @@ class HanBot(BotAI):
                 next_index = (current_index + 1) % len(patrol_points)
                 self.worker_scout_target = patrol_points[next_index]
 
-            print(f"Worker scout moving to next patrol point: {self.worker_scout_target} from index {current_index}")
+            print(f"Worker scout moving to next patrol point: {self.worker_scout_target} from index {current_index} to {next_index}")
 
         # if no path to scout target, randomly pick a point near the target and move to it
-        if not self.in_pathing_grid(self.worker_scout_target) or not self.can_place(UnitTypeId.SUPPLYDEPOT, self.worker_scout_target):
+        if not self.in_pathing_grid(self.worker_scout_target):
             self.worker_scout_target = random.choice(patrol_points)
             print(f"no path to scout target, randomly picking a point near the target {self.worker_scout_target}")
 
