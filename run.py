@@ -76,9 +76,10 @@ def main():
             maps.get(random.choice(map_list)),
             [
 #                bot1,
-                #Bot(Race.Terran, HanBot(), 'HanBot'),
-                Bot(Race.Terran, MyBot(), 'RandomBot'),
-                Computer(Race.Protoss, Difficulty.CheatInsane, ai_build=AIBuild.Macro),
+                Bot(Race.Terran, HanBot(), 'HanBot'),
+#                Bot(Race.Terran, MyBot(), 'RandomBot'),
+#                Computer(Race.Protoss, Difficulty.CheatInsane, ai_build=AIBuild.Macro),
+                Computer(Race.Protoss, Difficulty.Easy, ai_build=AIBuild.Macro),
             ],
             realtime=False,
         )

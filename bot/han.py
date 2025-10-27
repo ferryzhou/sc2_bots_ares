@@ -24,6 +24,9 @@ class HanBot(BotAI):
         self.scout_tags = set()  # Track units assigned to scouting
         self.scouted_locations = {}  # Track when locations were last scouted (location -> time)
         self.base_is_under_attack = False
+        self.worker_scout_tag = None  # Track the early game worker scout
+        self.worker_scout_sent = False  # Track if we've sent the worker scout
+        self.worker_scout_target = None  # Track current patrol target
         print(f"HanBot V2.0 initialized")
         # Any other initialization you need
     
@@ -150,11 +153,11 @@ class HanBot(BotAI):
         await self.execute_attack(military_units, tanks)
 
     async def manage_scouting(self):
-        """Manage scouting in late game to gather intelligence on enemy positions and expansions."""
-        # Only scout in late game (after 5 minutes or when we have sufficient army)
-        #if self.time < 300 and self.get_military_supply() < 30:
-        #    return
+        """Manage both early game worker scouting and late game military scouting."""
+        # Early game worker scout (send around 14 supply)
+        await self.manage_worker_scout()
         
+        # Late game military scouting
         # Determine desired number of scouts based on game time
         desired_scouts = 1 if self.time < 600 else 2  # 1 scout before 10 min, 2 after
         
@@ -220,6 +223,113 @@ class HanBot(BotAI):
                     # Mark location as scouted
                     self.scouted_locations[target] = self.time
                     print(f"Scout reached {target}, marking as scouted")
+    
+    async def manage_worker_scout(self):
+        """Send an SCV to scout the enemy base early in the game."""
+        # Send worker scout at 14 supply (or around 60 seconds)
+        if not self.worker_scout_sent and (self.supply_used >= 14 or self.time >= 10):
+            # Find an available worker
+            workers = self.workers.gathering
+            if workers:
+                scout = workers.furthest_to(self.start_location)  # Take worker furthest from minerals
+                self.worker_scout_tag = scout.tag
+                self.worker_scout_sent = True
+                print(f"Sending worker scout to enemy base at supply {self.supply_used}")
+        
+        if not self.worker_scout_tag:
+            return
+
+        scout = self.workers.find_by_tag(self.worker_scout_tag)
+        
+        # If scout is dead or doesn't exist, clear the tag
+        if not scout:
+            self.worker_scout_tag = None
+            return
+        
+        # If it's past early game (3 minutes), return scout to mining
+        if self.time > 180:
+            if self.mineral_field:
+                closest_mineral = self.mineral_field.closest_to(scout)
+                scout.gather(closest_mineral)
+            self.worker_scout_tag = None
+            print(f"Returning worker scout to mining")
+            return
+        
+        if not self.enemy_start_locations:
+            print(f"no enemy start locations. no scouting.")
+            return
+        
+        # Scout the enemy base
+        enemy_base = self.enemy_start_locations[0]        
+
+        if (scout.distance_to(enemy_base) > 20):
+            scout.move(enemy_base)
+            print(f"moving to enemy base {enemy_base}")
+            self.worker_scout_target = enemy_base
+            return
+        
+        r = 5
+        potential_patrol_points = [
+            enemy_base + Point2((r, r)),
+            enemy_base + Point2((r, 0)),
+            enemy_base + Point2((r, -r)),
+            enemy_base + Point2((0, -r)),
+            enemy_base + Point2((-r, -r)),
+            enemy_base + Point2((-r, 0)),
+            enemy_base + Point2((-r, r)),
+            enemy_base + Point2((0, r)),
+        ]
+        
+        # Filter to only valid, buildable points
+        patrol_points = [
+            p for p in potential_patrol_points
+            if self.in_map_bounds(p) and self.can_place(UnitTypeId.SUPPLYDEPOT, p) and self.in_pathing_grid(p)
+        ]
+        #print(f"number of patrol points: {len(patrol_points)}")
+        
+        # Create a patrol pattern around enemy base
+        # If we somehow have no valid points, use enemy base as fallback
+        if not patrol_points:
+            print(f"no valid patrol points. using enemy base as fallback.")
+            patrol_points = [enemy_base]
+
+        if (self.worker_scout_target == enemy_base):
+            self.worker_scout_target = min(patrol_points, key=lambda p: scout.distance_to(p))
+            print(f"moving to next patrol point {self.worker_scout_target}")
+            scout.move(self.worker_scout_target)
+            return
+
+        # If we don't have a target or we've reached it, pick the next one in sequence
+        if scout.distance_to(self.worker_scout_target) < 2:
+            print(f"arrived at target {self.worker_scout_target}")
+            # Find current target's index and move to next point
+            current_index = -1
+            for i, point in enumerate(patrol_points):
+                if point.distance_to(self.worker_scout_target) < 3:
+                    current_index = i
+                    break
+            
+            # Get next index (wrap around to 0 if at the end)
+            if current_index == -1:
+                print(f"current target not found, picking closest point")
+                # Current target not found (might have been filtered out), pick closest
+                self.worker_scout_target = min(patrol_points, key=lambda p: scout.distance_to(p))
+            else:
+                print(f"found current target {self.worker_scout_target} at index {current_index}")
+                next_index = (current_index + 1) % len(patrol_points)
+                self.worker_scout_target = patrol_points[next_index]
+
+            print(f"Worker scout moving to next patrol point: {self.worker_scout_target} from index {current_index}")
+
+        # if no path to scout target, randomly pick a point near the target and move to it
+        if not self.in_pathing_grid(self.worker_scout_target) or not self.can_place(UnitTypeId.SUPPLYDEPOT, self.worker_scout_target):
+            self.worker_scout_target = random.choice(patrol_points)
+            print(f"no path to scout target, randomly picking a point near the target {self.worker_scout_target}")
+
+        # Move to current target
+        print(f"moving to target {self.worker_scout_target} from {scout.position}")
+        #if self.time % 15 == 0:
+        scout.move(self.worker_scout_target)
     
     def get_scout_targets(self):
         """Get list of locations to scout (enemy expansions and key map locations)."""
@@ -766,7 +876,7 @@ class HanBot(BotAI):
         )
         
         if pos:
-            print(f"Building {unit_type} at position {pos}")
+            #print(f"Building {unit_type} at position {pos}")
             await self.build(unit_type, near=pos)
         else:
             # Fallback method 1: Try direct placement
@@ -850,7 +960,7 @@ class HanBot(BotAI):
 
     def train_units_if_needed(self, unit_type):
         desired_units = self.get_desired_units(unit_type)
-        print(f"desired units for {unit_type}: {desired_units}")
+        #print(f"desired units for {unit_type}: {desired_units}")
         if desired_units > 0:
             self.train_units(unit_type)
 
